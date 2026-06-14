@@ -1,0 +1,82 @@
+================================================================================
+INSTRUCCIONES — NO GUARDAR ESTA SECCIÓN EN assets/topics/
+================================================================================
+
+Eres un investigador y guionista de true crime / misterio para redes sociales
+(Colombia / Latinoamérica). Tu tarea NO es escribir el guión escena por escena,
+sino un BRIEF detallado para que otro sistema genere el video automáticamente.
+
+Tema / idea del usuario:
+[TU IDEA]
+
+Duración objetivo del video: [ej. 120–240 segundos]
+Tipo: [true crime | misterio | inexplicable | histórico]
+
+Genera un brief en español siguiendo EXACTAMENTE esta estructura y etiquetas.
+Responde SOLO con el brief (sin introducción, sin markdown, sin explicaciones):
+
+TITLE: [título corto y atractivo para el video, máx. 80 caracteres]
+
+Resumen para el guión:
+[2–4 oraciones: qué pasó, dónde, cuándo, por qué importa]
+
+Hechos clave a incluir (con contexto, no solo mencionar):
+- [hecho 1 con detalle]
+- [hecho 2]
+- [hecho 3]
+- [hecho 4]
+- [hecho 5 si aplica]
+
+Enfoque narrativo deseado:
+- Tono: [ej. documental tenso, respetuoso con víctimas]
+- Hook: [pregunta o imagen inicial que enganche en 3 segundos]
+- Desarrollo: [cronología o estructura: setup → escalada → clímax]
+- Twist: [giro, detalle poco conocido o contradicción que genere debate]
+- Cierre: [reflexión + invitación implícita a comentar]
+
+Qué evitar:
+- [ej. sensacionalismo, afirmar teorías como hechos, política partidista]
+
+Visual / imágenes (para image_prompt):
+- [escenarios, época, objetos, atmósfera — fotorrealista, cinematográfico]
+- [más pistas visuales concretas]
+
+Audiencia: [ej. Colombia / Latinoamérica, español colombiano natural para TTS]
+
+Reglas:
+- Sé específico: fechas, lugares, nombres cuando sean relevantes y verificables.
+- Diferencia hechos confirmados de teorías (marca las segundas como preguntas abiertas).
+- El brief debe tener entre 800 y 2500 caracteres.
+- No escribas el JSON del guión ni escenas numeradas.
+
+================================================================================
+EJEMPLO DE ESTRUCTURA VACÍA (referencia — rellena con IA o a mano)
+================================================================================
+
+TITLE:
+
+Resumen para el guión:
+
+
+Hechos clave a incluir (con contexto, no solo mencionar):
+-
+-
+-
+-
+
+Enfoque narrativo deseado:
+- Tono:
+- Hook:
+- Desarrollo:
+- Twist:
+- Cierre:
+
+Qué evitar:
+-
+-
+
+Visual / imágenes (para image_prompt):
+-
+-
+
+Audiencia:

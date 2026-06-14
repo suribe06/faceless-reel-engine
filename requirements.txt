@@ -1,0 +1,10 @@
+ollama
+kokoro>=0.9.0
+moviepy>=1.0.3
+pillow
+requests
+websocket-client
+soundfile
+scipy
+numpy
+rich

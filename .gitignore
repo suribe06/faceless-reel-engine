@@ -1,0 +1,33 @@
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# --- Entorno / IDE ---
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# --- Artefactos del pipeline (generados en runtime) ---
+output/*
+!output/.gitkeep
+temp/
+logs/*
+!logs/.gitkeep
+
+# --- Contenido local / creación de contenido ---
+assets/music/*.mp3
+assets/logo/*
+!assets/logo/.gitkeep
+assets/topics/*
+!assets/topics/topic_template.txt
