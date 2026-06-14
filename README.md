@@ -1,4 +1,4 @@
-# Video Pipeline — Faceless Content Generator
+# Faceless Reel Engine
 
 Pipeline de automatización en Python para generar videos verticales estilo true crime / misterio: imágenes SDXL + narración TTS + música de fondo.
 
@@ -31,8 +31,8 @@ Antes de ejecutar el pipeline, asegúrate de tener corriendo localmente:
 ## Instalación
 
 ```bash
-git clone https://github.com/suribe06/video_pipeline.git
-cd video_pipeline
+git clone https://github.com/suribe06/faceless-reel-engine.git
+cd faceless-reel-engine
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -93,7 +93,7 @@ Tiempo estimado: **15–25 minutos** para un video de 3–4 min en RTX 4060 Lapt
 ## Estructura
 
 ```
-video_pipeline/
+faceless-reel-engine/
 ├── main.py
 ├── config.py
 ├── pipeline/           # Módulos del pipeline

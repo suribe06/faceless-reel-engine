@@ -60,7 +60,7 @@ Checkpoint SDXL en `~/comfy/ComfyUI/models/checkpoints/` (default: `realvisxlV50
 ## Comando básico
 
 ```bash
-cd video_pipeline
+cd faceless-reel-engine
 source .venv/bin/activate
 
 python main.py \
@@ -153,7 +153,7 @@ Tras editar un prompt, **reinicia el pipeline** para recargar (se cachean en mem
 ## Estructura de carpetas
 
 ```
-video_pipeline/
+faceless-reel-engine/
 ├── main.py                 # Orquestador CLI
 ├── config.py               # Parámetros centralizados
 ├── PIPELINE.md             # Esta guía
