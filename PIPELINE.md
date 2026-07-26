@@ -154,22 +154,28 @@ Tras editar un prompt, **reinicia el pipeline** para recargar (se cachean en mem
 
 ```
 faceless-reel-engine/
-├── main.py                 # Orquestador CLI
+├── main.py                 # CLI (thin)
 ├── config.py               # Parámetros centralizados
+├── CONTEXT.md              # Glosario de dominio
 ├── PIPELINE.md             # Esta guía
 ├── prompts/                # Prompts editables (.md)
+├── tests/                  # Checks de núcleos puros
 ├── pipeline/
-│   ├── script_generator.py # Paso 1 — Ollama
+│   ├── orchestrator.py     # Orden de pasos, resume, extensiones
+│   ├── run_state.py        # Documento RunState (scenes + artifacts)
+│   ├── duration_policy.py  # Umbrales de duración (único dueño)
+│   ├── script_generator.py # Paso 1 — dominio guión (Ollama via adapter)
 │   ├── tts_generator.py    # Paso 2 — Kokoro
-│   ├── image_generator.py  # Paso 3 — ComfyUI
-│   ├── video_assembler.py  # Paso 4 — MoviePy
+│   ├── image_generator.py  # Paso 3 — dominio imágenes (ComfyUI via adapter)
+│   ├── video_assembler.py  # Paso 4 — dispatch + MoviePy legacy
+│   ├── ffmpeg_assembler.py # Paso 4 — adapter FFmpeg (default)
+│   ├── assembly_common.py  # Planner helpers compartidos
 │   ├── subtitles.py        # Subtítulos desde narration
 │   ├── preflight.py        # Checks al inicio
-│   ├── script_validator.py # Validación pre-ComfyUI
-│   ├── state.py            # Resume temp/pipeline_state.json
-│   ├── resources.py        # Liberación secuencial de VRAM/RAM
-│   ├── ollama_client.py    # Descarga modelo Ollama
-│   ├── comfyui_client.py   # Auto-arranque ComfyUI
+│   ├── script_validator.py # Re-export validate_before_images
+│   ├── state.py            # Persistencia (re-export run_state)
+│   ├── ollama_client.py    # Adapter: chat + unload VRAM
+│   ├── comfyui_client.py   # Adapter: lifecycle + HTTP generate
 │   └── prompt_loader.py    # Carga prompts/*.md
 ├── assets/
 │   ├── logo/logo.png       # Marca de agua (requerido para branding)
