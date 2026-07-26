@@ -7,15 +7,14 @@ import logging
 import re
 from typing import Any
 
-import requests
-
 from config import PipelineConfig
+from pipeline.duration_policy import validate_estimated_duration
+from pipeline.ollama_client import chat as ollama_chat
 from pipeline.prompt_loader import format_prompt, load_prompt
+from pipeline.run_state import KEY_MOMENTS
 from pipeline.topic_loader import TopicBrief
 
 logger = logging.getLogger(__name__)
-
-KEY_MOMENTS = frozenset({"hook", "twist", "closing"})
 
 _WIDE_SUFFIX = ", wide establishing shot, cinematic composition"
 _CLOSEUP_SUFFIX = ", close-up detail shot, different angle, shallow depth of field"
@@ -217,7 +216,7 @@ def extend_script_for_duration(
         f"Contexto (últimas escenas):\n{context}"
     )
 
-    raw = _call_ollama(config, user_prompt)
+    raw = ollama_chat(config, user_prompt)
     parsed = json.loads(_extract_json(raw))
     extra = parsed.get("scenes", parsed if isinstance(parsed, list) else [])
     if not isinstance(extra, list) or not extra:
@@ -257,17 +256,7 @@ def _validate_script(data: dict[str, Any], config: PipelineConfig) -> None:
             f"se recibieron {scene_count}"
         )
 
-    target_min = config.TARGET_DURATION_MIN_SECONDS
-    target_max = config.TARGET_DURATION_MAX_SECONDS
-    tolerance = 0.15
-    estimated = data["total_estimated_duration"]
-    min_allowed = int(target_min * (1 - tolerance))
-    max_allowed = int(target_max * (1 + tolerance))
-    if not (min_allowed <= estimated <= max_allowed):
-        raise ValueError(
-            f"total_estimated_duration debe estar entre {target_min} y {target_max}s "
-            f"(±15%), se recibió {estimated}s"
-        )
+    validate_estimated_duration(data["total_estimated_duration"], config)
 
     normalize_script_scenes(scenes, config)
 
@@ -276,79 +265,6 @@ def _validate_script(data: dict[str, Any], config: PipelineConfig) -> None:
             raise ValueError(f"Escena {i}: 'narration' está vacía")
         if not _prompt_text(scene.get("image_prompt")):
             raise ValueError(f"Escena {i}: 'image_prompt' está vacío")
-
-
-def _ollama_timeout(config: PipelineConfig) -> int:
-    """Scale request timeout with expected script length."""
-    base = 300
-    extra = config.TARGET_DURATION_MAX_SECONDS // 30 * 30
-    return min(base + extra, 900)
-
-
-def _call_ollama(
-    config: PipelineConfig,
-    user_prompt: str,
-    *,
-    use_json_format: bool = True,
-) -> str:
-    """Send a prompt to Ollama chat API and return the raw response text."""
-    url = f"{config.OLLAMA_BASE_URL.rstrip('/')}/api/chat"
-    payload: dict[str, Any] = {
-        "model": config.OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": load_prompt("script_system", config)},
-            {"role": "user", "content": user_prompt},
-        ],
-        "stream": False,
-        "think": False,
-    }
-    if use_json_format:
-        payload["format"] = "json"
-
-    timeout = _ollama_timeout(config)
-
-    try:
-        response = requests.post(url, json=payload, timeout=timeout)
-        response.raise_for_status()
-    except requests.ConnectionError as exc:
-        raise ConnectionError(
-            f"No se pudo conectar con Ollama en {config.OLLAMA_BASE_URL}. "
-            "Verifica que Ollama esté corriendo."
-        ) from exc
-    except requests.Timeout as exc:
-        raise TimeoutError(
-            f"Timeout al generar guión con Ollama (modelo: {config.OLLAMA_MODEL}, "
-            f"{timeout}s). Prueba un rango de duración más corto o "
-            f"`ollama pull {config.OLLAMA_MODEL}`."
-        ) from exc
-    except requests.HTTPError as exc:
-        raise RuntimeError(
-            f"Error HTTP de Ollama ({response.status_code}): {response.text[:500]}"
-        ) from exc
-
-    body = response.json()
-    if body.get("error"):
-        raise RuntimeError(
-            f"Ollama error (modelo: {config.OLLAMA_MODEL}): {body['error']}. "
-            f"Verifica que el modelo esté instalado: `ollama pull {config.OLLAMA_MODEL}`"
-        )
-
-    message = body.get("message", {})
-    content = (message.get("content") or "").strip()
-
-    if not content:
-        thinking = (message.get("thinking") or "").strip()
-        if thinking:
-            raise RuntimeError(
-                f"Ollama devolvió respuesta vacía. El modelo {config.OLLAMA_MODEL} "
-                "usó modo thinking sin generar JSON. Esto ya debería estar corregido; "
-                "reintenta o prueba otro modelo."
-            )
-        raise RuntimeError(
-            f"Ollama devolvió respuesta vacía para el modelo {config.OLLAMA_MODEL}."
-        )
-
-    return content
 
 
 def generate_script(topic: TopicBrief, config: PipelineConfig) -> dict[str, Any]:
@@ -382,7 +298,7 @@ def generate_script(topic: TopicBrief, config: PipelineConfig) -> dict[str, Any]
     for attempt in range(3):
         try:
             if attempt == 0:
-                raw = _call_ollama(config, user_prompt)
+                raw = ollama_chat(config, user_prompt)
             else:
                 correction = format_prompt(
                     load_prompt("script_correction", config),
@@ -390,7 +306,7 @@ def generate_script(topic: TopicBrief, config: PipelineConfig) -> dict[str, Any]
                     min_scenes=min_scenes,
                     max_scenes=max_scenes,
                 )
-                raw = _call_ollama(config, f"{user_prompt}\n\n{correction}")
+                raw = ollama_chat(config, f"{user_prompt}\n\n{correction}")
 
             parsed = json.loads(_extract_json(raw))
             _validate_script(parsed, config)

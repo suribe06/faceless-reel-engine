@@ -101,6 +101,24 @@ def release_tts_resources() -> None:
     logger.info("Recursos Kokoro TTS liberados de memoria")
 
 
+def release_after_tts() -> None:
+    """Release Kokoro after audio generation (incl. GPU/Python GC)."""
+    import gc
+
+    logger.info("--- Liberando recursos del paso 2 (Kokoro TTS) ---")
+    release_tts_resources()
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+    except ImportError:
+        pass
+
+
 def _concat_audio_chunks(chunks: list[np.ndarray], config: PipelineConfig) -> np.ndarray:
     """Join TTS segments with short silence and peak normalization."""
     if len(chunks) == 1:

@@ -1,50 +1,22 @@
-"""Module 4: Final video assembly with MoviePy."""
+"""Module 4: Final video assembly with MoviePy (legacy) or FFmpeg dispatch."""
 
 from __future__ import annotations
 
 import logging
 import random
-import re
-import shutil
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from config import PipelineConfig
+from pipeline.assembly_common import (
+    cleanup_temp as remove_temp_dir,
+    pick_background_music,
+    sanitize_title,
+    scene_image_part_durations,
+)
 from pipeline.subtitles import overlay_subtitles_on_clip
 
 logger = logging.getLogger(__name__)
-
-
-def _sanitize_title(title: str) -> str:
-    """Convert title to a safe lowercase filename slug."""
-    slug = title.lower().strip()
-    slug = re.sub(r"[^\w\s-]", "", slug, flags=re.UNICODE)
-    slug = re.sub(r"[\s_]+", "-", slug)
-    slug = re.sub(r"-+", "-", slug).strip("-")
-    return slug or "video"
-
-
-def _pick_background_music(config: PipelineConfig) -> Path | None:
-    """Pick background music — default track or random from assets/music."""
-    music_dir = config.ASSETS_MUSIC_DIR
-    if not music_dir.exists():
-        return None
-
-    if config.MUSIC_MODE == "random":
-        tracks = list(music_dir.glob("*.mp3")) + list(music_dir.glob("*.MP3"))
-        return random.choice(tracks) if tracks else None
-
-    default_path = music_dir / config.DEFAULT_MUSIC_FILE
-    if default_path.exists():
-        return default_path
-
-    logger.warning(
-        "Pista default no encontrada (%s) — usando primera MP3 disponible",
-        default_path.name,
-    )
-    tracks = sorted(music_dir.glob("*.mp3"))
-    return tracks[0] if tracks else None
 
 
 def _concatenate_scenes(clips, config: PipelineConfig, mpy_version: str, mp: dict):
@@ -70,13 +42,6 @@ def _concatenate_scenes(clips, config: PipelineConfig, mpy_version: str, mp: dic
     for clip in clips[1:]:
         faded.append(clip.crossfadein(fade))
     return concatenate_videoclips(faded, method="compose", padding=-fade)
-
-
-def _cleanup_temp(temp_dir: Path) -> None:
-    """Remove temporary working files."""
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
-        logger.info("Directorio temporal limpiado: %s", temp_dir)
 
 
 def _import_moviepy():
@@ -200,9 +165,8 @@ def _build_scene_clip(
     if len(image_paths) == 1:
         visual = _make_image_clip(image_paths[0], duration, config, mpy_version, mp)
     else:
-        split = duration * 0.5
+        part_durations = scene_image_part_durations(len(image_paths), duration)
         parts = []
-        part_durations = [split, duration - split]
         for img_path, part_dur in zip(image_paths, part_durations):
             parts.append(_make_image_clip(img_path, part_dur, config, mpy_version, mp))
         visual = concatenate_videoclips(parts, method="compose")
@@ -309,7 +273,7 @@ def assemble_video(
     video = _concatenate_scenes(clips, config, mpy_version, mp)
     video = _apply_watermark(video, config, mpy_version, mp)
 
-    music_track = _pick_background_music(config)
+    music_track = pick_background_music(config)
     if music_track:
         logger.info("Música de fondo: %s", music_track.name)
         bg_music = mp["AudioFileClip"](str(music_track))
@@ -341,7 +305,7 @@ def assemble_video(
         logger.warning("No hay música en %s — video solo con narración", config.ASSETS_MUSIC_DIR)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{_sanitize_title(title)}_{timestamp}.mp4"
+    filename = f"{sanitize_title(title)}_{timestamp}.mp4"
     output_path = config.OUTPUT_DIR / filename
 
     logger.info("Codificando video final (MoviePy)...")
@@ -362,7 +326,7 @@ def assemble_video(
     video.close()
 
     if cleanup_temp:
-        _cleanup_temp(config.TEMP_DIR)
+        remove_temp_dir(config.TEMP_DIR)
 
     logger.info("Video final guardado: %s", output_path)
     return str(output_path)
