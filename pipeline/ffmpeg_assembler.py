@@ -9,8 +9,14 @@ from pathlib import Path
 from typing import Any
 
 from config import PipelineConfig
+from pipeline.assembly_common import (
+    ass_font_size,
+    pick_background_music,
+    sanitize_title,
+    scene_image_part_durations,
+    cleanup_temp as remove_temp_dir,
+)
 from pipeline.subtitles import write_srt_for_scenes
-from pipeline.video_assembler import _pick_background_music, _sanitize_title
 
 logger = logging.getLogger(__name__)
 
@@ -162,8 +168,9 @@ def _concat_narration(audio_files: list[str], output: Path) -> None:
 def _subtitle_filter(srt_path: Path, config: PipelineConfig) -> str:
     escaped = srt_path.resolve().as_posix().replace(":", r"\:").replace("'", r"\'")
     margin_v = config.SUBTITLE_MARGIN_Y // 3
+    font_size = ass_font_size(config)
     style = (
-        f"FontName=DejaVu Sans,FontSize=16,PrimaryColour=&HFFFFFF,"
+        f"FontName=DejaVu Sans,FontSize={font_size},PrimaryColour=&HFFFFFF,"
         f"OutlineColour=&H000000,Outline=2,Shadow=0,"
         f"BackColour=&H80000000,BorderStyle=4,Alignment=2,MarginV={margin_v}"
     )
@@ -198,11 +205,9 @@ def assemble_video_ffmpeg(
         if len(image_paths) == 1:
             _render_image_clip(image_paths[0], duration, segment, config, pan_mode)
         else:
-            split = duration * 0.5
+            part_durs = scene_image_part_durations(len(image_paths), duration)
             parts: list[Path] = []
-            for j, (img, part_dur) in enumerate(
-                [(image_paths[0], split), (image_paths[1], duration - split)]
-            ):
+            for j, (img, part_dur) in enumerate(zip(image_paths, part_durs)):
                 part = work_dir / f"scene_{idx:02d}_{j}.mp4"
                 mode = pan_modes[(idx + j) % len(pan_modes)]
                 _render_image_clip(img, part_dur, part, config, mode)
@@ -222,10 +227,10 @@ def assemble_video_ffmpeg(
     write_srt_for_scenes(scenes, srt_path, config)
 
     timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = config.OUTPUT_DIR / f"{_sanitize_title(title)}_{timestamp}.mp4"
+    output_path = config.OUTPUT_DIR / f"{sanitize_title(title)}_{timestamp}.mp4"
     temp_mux = work_dir / "muxed.mp4"
 
-    music_track = _pick_background_music(config)
+    music_track = pick_background_music(config)
     total_duration = sum(float(s.get("audio_duration", 0)) for s in scenes)
     fade = min(3.0, total_duration / 2)
     fade_start = max(0.0, total_duration - fade)
@@ -375,8 +380,7 @@ def assemble_video_ffmpeg(
         output_path.write_bytes(temp_mux.read_bytes())
 
     if cleanup_temp:
-        shutil.rmtree(config.TEMP_DIR, ignore_errors=True)
-        logger.info("Directorio temporal limpiado")
+        remove_temp_dir(config.TEMP_DIR)
 
     logger.info("Video final guardado: %s", output_path)
     return str(output_path)
