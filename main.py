@@ -188,7 +188,7 @@ def main() -> int:
             logger.info("Brief: %s (%d caracteres)", topic.source_path, len(topic.brief))
         else:
             logger.info(
-                "Brief inline (%d caracteres) — considera crear %s/%s.txt",
+                "Frase corta (%d caracteres) — el pipeline escribe %s/%s.txt y sigue",
                 len(topic.brief),
                 config.TOPICS_DIR.name,
                 topic.key,

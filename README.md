@@ -50,7 +50,7 @@ Descarga las pistas con `python scripts/download_music.py` o coloca `.mp3` manua
 
 ## Temas / briefs
 
-Crea un brief en `assets/topics/` usando `topic_template.txt` como guía. Luego pásalo al pipeline por slug:
+Una frase en `--topic` basta. Si no hay archivo, Ollama escribe el brief con `topic_template.txt`, lo guarda en `assets/topics/` y sigue hasta el mp4. Un `.txt` que ya exista se usa tal cual y no se regenera.
 
 ```bash
 # Lista briefs disponibles
@@ -60,7 +60,7 @@ python main.py --list-topics
 python main.py --topic mi-caso
 ```
 
-También puedes pasar el tema como frase corta en `--topic` sin archivo previo.
+La próxima corrida del mismo slug reutiliza ese archivo. Bórralo si quieres otro brief.
 
 ## Uso
 
@@ -83,10 +83,11 @@ python main.py --topic "La bruja de Blair colombiana" --keep-temp
 
 ## Flujo del pipeline
 
-1. **Guión** — Ollama genera escenas en JSON (narración ES, `hook_line`, `visual_anchor`, prompts EN)
-2. **TTS** — Kokoro narra cada frase y guarda la duración real → `temp/audio/scene_N.wav`
-3. **Imágenes** — ComfyUI genera SDXL y deja el checkpoint cargado entre tomas → `temp/images/scene_N.png`
-4. **Video** — FFmpeg hace zoom/pan, quema subtítulos y la frase de apertura, mezcla la voz a −14 LUFS → `output/`
+1. **Brief** — si `--topic` es una frase, Ollama arma el brief y lo guarda
+2. **Guión** — Ollama genera escenas en JSON (narración ES, `hook_line`, `visual_anchor`, prompts EN)
+3. **TTS** — Kokoro narra cada frase y guarda la duración real → `temp/audio/scene_N.wav`
+4. **Imágenes** — ComfyUI genera SDXL y deja el checkpoint cargado entre tomas → `temp/images/scene_N.png`
+5. **Video** — FFmpeg hace zoom/pan, quema subtítulos y la frase de apertura, mezcla la voz a −14 LUFS → `output/`
 
 ## Medir un video
 

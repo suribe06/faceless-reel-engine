@@ -15,6 +15,7 @@ from pipeline.script_generator import (
     generate_script,
     normalize_script_scenes,
 )
+from pipeline.topic_expander import expand_inline_topic, needs_brief
 from pipeline.topic_loader import TopicBrief
 from pipeline.tts_generator import generate_audio, release_after_tts
 from pipeline.video_assembler import assemble_video
@@ -79,6 +80,10 @@ def run_pipeline(
     Returns the path to the final MP4.
     """
     resume = resume_from
+
+    if resume not in ("tts", "images", "video") and needs_brief(topic):
+        logger.info("=== Paso 0: Brief automático desde la frase ===")
+        topic = expand_inline_topic(topic, config)
 
     if resume in ("images", "video"):
         run = load_run(config, fallback_topic=topic.key)

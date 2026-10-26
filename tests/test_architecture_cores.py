@@ -43,6 +43,7 @@ from pipeline.subtitles import (
     split_narration_lines,
     split_spoken_sentences,
 )
+from pipeline.topic_expander import needs_brief, parse_generated_brief
 from pipeline.topic_loader import TopicBrief
 
 
@@ -265,6 +266,41 @@ class PipelineQualityTests(unittest.TestCase):
                 check=True,
             )
             self.assertGreater(mixed.stat().st_size, 500)
+
+
+class TopicBriefTests(unittest.TestCase):
+    def test_one_line_needs_research(self) -> None:
+        inline = TopicBrief.from_inline("El misterio del vuelo MH370")
+        self.assertTrue(needs_brief(inline))
+        saved = TopicBrief(
+            key="caso",
+            label="Caso",
+            brief="TITLE ya no importa",
+            source_path=Path("assets/topics/caso.txt"),
+        )
+        self.assertFalse(needs_brief(saved))
+
+    def test_parse_brief_starts_at_title(self) -> None:
+        raw = """Notas previas que no se guardan.
+TITLE: La toma del Palacio
+
+Resumen para el guión:
+El 6 de noviembre de 1985 el M-19 tomó el Palacio de Justicia en Bogotá.
+
+Hechos clave a incluir (con contexto, no solo mencionar):
+- Entraron disfrazados y el edificio ardió durante la retoma del Ejército.
+- Magistrados y visitantes quedaron atrapados; hay desaparecidos.
+- El archivo de la Corte se quemó y varias versiones oficiales no cierran.
+- El cierre tiene que tratar las teorías como preguntas, no como hechos.
+"""
+        label, body = parse_generated_brief(raw)
+        self.assertEqual(label, "La toma del Palacio")
+        self.assertTrue(body.startswith("Resumen"))
+        self.assertNotIn("Notas previas", body)
+
+    def test_parse_brief_rejects_empty_shell(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_generated_brief("TITLE: Solo un titulo\n\nResumen corto.")
 
 
 class SubtitlesTests(unittest.TestCase):
