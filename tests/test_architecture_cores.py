@@ -28,8 +28,21 @@ from pipeline.run_state import (
     load_run,
     save_run,
 )
-from pipeline.script_generator import normalize_script_scenes
-from pipeline.subtitles import build_subtitle_cues, split_narration_lines
+from pipeline.ffmpeg_assembler import ken_burns_filter, narration_mix_filter
+from pipeline.image_generator import sampling_params, shot_seed
+from pipeline.script_generator import (
+    apply_script_visuals,
+    normalize_script_scenes,
+    short_hook_line,
+)
+from pipeline.subtitles import (
+    build_subtitle_cues,
+    cues_from_spoken_durations,
+    cues_in_window,
+    scene_cues,
+    split_narration_lines,
+    split_spoken_sentences,
+)
 from pipeline.topic_loader import TopicBrief
 
 
@@ -121,6 +134,137 @@ class AssemblyCommonTests(unittest.TestCase):
         parts = scene_image_part_durations(2, 10.0)
         self.assertEqual(len(parts), 2)
         self.assertAlmostEqual(sum(parts), 10.0)
+
+
+class PipelineQualityTests(unittest.TestCase):
+    def test_missing_prompt_stays_english(self) -> None:
+        cfg = PipelineConfig()
+        scenes = [{"narration": "En Bogotá nadie vio el cuerpo aquella noche."}]
+        normalize_script_scenes(scenes, cfg)
+        prompt = scenes[0]["image_prompt"]
+        self.assertNotIn("Bogotá", prompt)
+        self.assertNotIn("nadie", prompt)
+        self.assertIn("photorealistic", prompt)
+
+    def test_anchor_is_shared_and_hook_fits(self) -> None:
+        cfg = PipelineConfig()
+        data = {
+            "title": "Caso",
+            "visual_anchor": "1985 Medellin rainy night, 35mm",
+            "hook_line": "Nadie denunció el segundo disparo en la escalera del palacio",
+            "scenes": [
+                {"narration": "Texto.", "image_prompt": "empty hallway"},
+                {"narration": "Otro.", "image_prompt": "courtyard"},
+                {"narration": "Cierre.", "image_prompt": "door"},
+                {"narration": "Fin.", "image_prompt": "street"},
+            ],
+        }
+        normalize_script_scenes(data["scenes"], cfg)
+        apply_script_visuals(data, cfg)
+        self.assertTrue(data["scenes"][0]["image_prompt"].startswith("1985 Medellin"))
+        self.assertTrue(data["scenes"][-1]["image_prompt"].startswith("1985 Medellin"))
+        self.assertLessEqual(len(data["hook_line"]), 42)
+        self.assertNotIn("palacio", data["hook_line"])
+
+    def test_sampling_and_seed(self) -> None:
+        full = PipelineConfig()
+        self.assertEqual(sampling_params(full)[:2], (20, 6.0))
+        fast = PipelineConfig()
+        fast.SDXL_CHECKPOINT = "RealVisXL_lightning.safetensors"
+        self.assertEqual(sampling_params(fast), (6, 1.5, "euler", "sgm_uniform"))
+        self.assertEqual(shot_seed(10, 1, 0), shot_seed(10, 1, 0))
+        self.assertNotEqual(shot_seed(10, 1, 0), shot_seed(10, 2, 0))
+
+    def test_spoken_cues_track_each_sentence(self) -> None:
+        cfg = PipelineConfig()
+        sentences = split_spoken_sentences("Primera frase larga de prueba. Segunda frase corta.")
+        self.assertEqual(len(sentences), 2)
+        cues = cues_from_spoken_durations(sentences, [1.0, 2.0], cfg, 0.08)
+        self.assertAlmostEqual(cues[0][0], 0.0)
+        self.assertGreaterEqual(cues[-1][0], 1.08)
+        self.assertAlmostEqual(cues[-1][1], 3.08)
+        scene = {
+            "narration": "ignorame",
+            "audio_duration": 9,
+            "subtitle_cues": [{"start": 0.0, "end": 1.2, "text": "medido"}],
+        }
+        self.assertEqual(scene_cues(scene, cfg), [(0.0, 1.2, "medido")])
+        window = cues_in_window([(0.0, 1.0, "a"), (1.0, 3.0, "b")], 1.0, 2.0)
+        self.assertEqual(window[0][2], "b")
+        self.assertAlmostEqual(window[0][1], 1.0)
+
+    def test_filters_and_a_short_clip(self) -> None:
+        cfg = PipelineConfig()
+        graph = ken_burns_filter(2.0, cfg, "left_to_right")
+        self.assertIn("zoompan", graph)
+        music = narration_mix_filter(cfg, 10, has_music=True)
+        self.assertIn("sidechaincompress", music)
+        self.assertIn("asplit", music)
+        self.assertIn("loudnorm", narration_mix_filter(cfg, 10, has_music=False))
+        self.assertLessEqual(len(short_hook_line("uno dos tres cuatro cinco", 12)), 12)
+
+        import shutil
+        import subprocess
+        import tempfile
+
+        from PIL import Image
+
+        from pipeline.ffmpeg_assembler import _render_image_clip
+
+        if shutil.which("ffmpeg") is None:
+            self.skipTest("ffmpeg")
+
+        cfg.IMAGE_WIDTH = 320
+        cfg.IMAGE_HEIGHT = 568
+        cfg.VIDEO_FPS = 12
+        cfg.FFMPEG_PRESET = "ultrafast"
+        cfg.LOGO_PATH = Path("/tmp/logo-que-no-existe.png")
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            img = folder / "still.png"
+            Image.new("RGB", (160, 284), (20, 24, 48)).save(img)
+            out = folder / "clip.mp4"
+            srt = folder / "c.srt"
+            srt.write_text(
+                "1\n00:00:00,000 --> 00:00:00,400\nhola\n",
+                encoding="utf-8",
+            )
+            _render_image_clip(
+                str(img),
+                0.4,
+                out,
+                cfg,
+                "left_to_right",
+                srt_path=srt,
+                hook_text="Nadie vio",
+            )
+            self.assertGreater(out.stat().st_size, 500)
+
+            wav = folder / "voice.wav"
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "sine=frequency=220:duration=0.4",
+                    str(wav),
+                ],
+                check=True,
+            )
+            mixed = folder / "mixed.mp4"
+            mix = narration_mix_filter(cfg, 0.4, has_music=True)
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", str(out),
+                    "-i", str(wav),
+                    "-f", "lavfi", "-i", "sine=frequency=80:duration=0.4",
+                    "-filter_complex", mix,
+                    "-map", "0:v", "-map", "[aout]",
+                    "-c:v", "copy", "-c:a", "aac",
+                    str(mixed),
+                ],
+                check=True,
+            )
+            self.assertGreater(mixed.stat().st_size, 500)
 
 
 class SubtitlesTests(unittest.TestCase):

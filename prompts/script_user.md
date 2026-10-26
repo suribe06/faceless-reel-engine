@@ -8,6 +8,8 @@ CONTEXTO Y BRIEF — usa TODO este material para el guión (hechos, cronología,
 El JSON debe tener exactamente esta estructura:
 {{
   "title": "Título del video",
+  "hook_line": "Frase de máximo 8 palabras para la pantalla",
+  "visual_anchor": "English look shared by every shot: era, city, light, film stock. Under 20 words.",
   "scenes": [
     {{
       "scene_number": 1,
@@ -35,9 +37,12 @@ Requisitos de duración y ritmo (CRÍTICO — retención en redes):
 - Basa el guión en el brief de arriba: incluye contexto histórico, detalles concretos y tensión narrativa
 
 Requisitos de imagen (IMPORTANTE):
-- TODAS las escenas llevan exactamente un campo "image_prompt" (string en inglés)
+- visual_anchor es UN look en inglés (época, ciudad, luz, película) de menos de 20 palabras. El pipeline lo antepone a cada imagen para que el caso se vea el mismo
+- hook_line es una frase en español de 4 a 8 palabras. Sale en grande los primeros segundos. No es la narración
+- TODAS las escenas llevan exactamente un campo "image_prompt" (string en inglés, menos de 40 palabras)
 - NO uses "image_prompts" ni arrays — el pipeline genera los dobles shots automáticamente
 - Cada image_prompt debe ser fotorrealista, con iluminación, mood y detalle visual claro
+- Nunca pongas narración en español dentro de image_prompt
 
 Otros requisitos:
 - Cada narration en español colombiano fluido para TTS

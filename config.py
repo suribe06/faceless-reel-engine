@@ -25,16 +25,24 @@ class PipelineConfig:
     TARGET_DURATION_MAX_SECONDS: int = 240  # 4 min — máximo deseado del video
     COMFYUI_IMAGE_WIDTH: int = 640   # resolución de generación (VRAM-friendly, 9:16)
     COMFYUI_IMAGE_HEIGHT: int = 1152
-    COMFYUI_STEPS: int = 25
+    COMFYUI_STEPS: int = 20  # RealVisXL full; un checkpoint *lightning*/*hyper* baja solo
+    COMFYUI_CFG: float = 6.0
+    COMFYUI_SAMPLER: str = "dpmpp_2m"
+    COMFYUI_SCHEDULER: str = "karras"
+    COMFYUI_SEED: int = -1  # <0 = una semilla base por corrida; los shots salen de esa base
     COMFYUI_IMAGE_RETRIES: int = 2
-    IMAGE_WIDTH: int = 1080          # resolución del video final (upscale en MoviePy)
+    IMAGE_ANCHOR: str = (
+        "photorealistic cinematic still, consistent film look, "
+        "moody low-key lighting, 35mm, no readable text"
+    )
+    IMAGE_WIDTH: int = 1080          # resolución del video final (FFmpeg escala desde 640×1152)
     IMAGE_HEIGHT: int = 1920
     MUSIC_VOLUME: float = 0.15
     MUSIC_MODE: str = "default"  # "default" | "random"
     DEFAULT_MUSIC_FILE: str = "mixkit_188_dark_ambient.mp3"
     MUSIC_MIN_TRACKS: int = 5
     SCENE_CROSSFADE_SECONDS: float = 0.0  # crossfade off by default (faster encode)
-    SUBTITLES_ENABLED: bool = True  # subtítulos quemados desde scene.narration (SRT/FFmpeg o PIL/MoviePy)
+    SUBTITLES_ENABLED: bool = True  # subtítulos quemados desde las frases medidas en el TTS
     SUBTITLE_FONT_PATH: Path | None = None
     SUBTITLE_FONT_SIZE: int = 42
     SUBTITLE_MAX_CHARS: int = 38
@@ -42,11 +50,13 @@ class PipelineConfig:
     SUBTITLE_MARGIN_Y: int = 220
     SUBTITLE_BG_OPACITY: float = 0.72
     KEN_BURNS_ENABLED: bool = True
-    KEN_BURNS_ZOOM: float = 1.12  # oversize estático para pan (NO zoom progresivo)
+    KEN_BURNS_ZOOM: float = 1.12  # zoom final; el plano arranca en 1.0 y hace pan
     KEN_BURNS_PAN_MODES: tuple[str, ...] = field(
         default_factory=lambda: ("left_to_right", "right_to_left", "top_to_bottom")
-    )  # solo pan horizontal o vertical, suave
-    VIDEO_ENGINE: str = "ffmpeg"  # ffmpeg (rápido) | moviepy (legacy, lento)
+    )
+    HOOK_OVERLAY_ENABLED: bool = True
+    HOOK_OVERLAY_SECONDS: float = 2.6
+    HOOK_FONT_SIZE: int = 58
     VIDEO_FPS: int = 24
     FFMPEG_PRESET: str = "veryfast"
     FFMPEG_CRF: int = 23

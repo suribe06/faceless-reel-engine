@@ -29,6 +29,29 @@ def _apply_image_style(prompt: str, config: PipelineConfig) -> str:
     return f"{prompt.rstrip().rstrip(',')}, {suffix.lstrip(', ')}"
 
 
+def sampling_params(config: PipelineConfig) -> tuple[int, float, str, str]:
+    """Steps, CFG, sampler, scheduler.
+
+    shortcut: a checkpoint whose name contains lightning/hyper/turbo uses the
+    4–8 step recipe. Full RealVisXL at 4 steps looks broken; drop the filename
+    match when you want an explicit flag.
+    """
+    name = config.SDXL_CHECKPOINT.lower()
+    if any(tag in name for tag in ("lightning", "hyper", "turbo")):
+        return 6, 1.5, "euler", "sgm_uniform"
+    return (
+        config.COMFYUI_STEPS,
+        config.COMFYUI_CFG,
+        config.COMFYUI_SAMPLER,
+        config.COMFYUI_SCHEDULER,
+    )
+
+
+def shot_seed(base_seed: int, scene_index: int, shot_index: int) -> int:
+    """Stable seed per shot so a resume does not reshuffle the whole film."""
+    return (base_seed + scene_index * 1009 + shot_index * 17) % (2**32)
+
+
 def _build_workflow(
     prompt: str,
     negative_prompt: str,
@@ -38,6 +61,9 @@ def _build_workflow(
     seed: int,
     filename_prefix: str,
     steps: int = 20,
+    cfg: float = 6.0,
+    sampler: str = "dpmpp_2m",
+    scheduler: str = "karras",
 ) -> dict[str, Any]:
     """Build a ComfyUI API workflow for SDXL image generation."""
     return {
@@ -62,9 +88,9 @@ def _build_workflow(
             "inputs": {
                 "seed": seed,
                 "steps": steps,
-                "cfg": 7.0,
-                "sampler_name": "euler_ancestral",
-                "scheduler": "karras",
+                "cfg": cfg,
+                "sampler_name": sampler,
+                "scheduler": scheduler,
                 "denoise": 1.0,
                 "model": ["1", 0],
                 "positive": ["2", 0],
@@ -108,6 +134,22 @@ def generate_images(
     base_url = config.COMFYUI_BASE_URL
     total_scenes = len(scenes)
     total_images = 0
+    steps, cfg, sampler, scheduler = sampling_params(config)
+    base_seed = (
+        config.COMFYUI_SEED % (2**32)
+        if config.COMFYUI_SEED >= 0
+        else random.randint(0, 2**32 - 1)
+    )
+    logger.info(
+        "SDXL %s | %d steps cfg %.1f %s/%s | seed base %d",
+        config.SDXL_CHECKPOINT,
+        steps,
+        cfg,
+        sampler,
+        scheduler,
+        base_seed,
+    )
+    model_cleared = False
 
     for idx, scene in enumerate(scenes, start=1):
         key_moment = scene.get("key_moment")
@@ -136,7 +178,7 @@ def generate_images(
             total_images += len(existing)
             continue
 
-        for prompt, label in zip(prompts, labels):
+        for shot_index, (prompt, label) in enumerate(zip(prompts, labels)):
             suffix = f"_{label}" if label else ""
             logger.info(
                 "[IMG] Escena %d/%d%s (%s) %dx%d...",
@@ -148,24 +190,32 @@ def generate_images(
                 config.COMFYUI_IMAGE_HEIGHT,
             )
 
-            comfyui_client.free_vram(base_url)
+            # One unload before the batch so a leftover model does not sit next
+            # to SDXL. Keeping the checkpoint loaded between shots is the
+            # difference between ~15s and a full reload on every still.
+            if not model_cleared:
+                comfyui_client.free_vram(base_url)
+                model_cleared = True
 
-            seed = random.randint(0, 2**32 - 1)
+            seed = shot_seed(base_seed, idx, shot_index)
             prefix = f"scene_{idx}{suffix}_{seed}"
             dest = images_dir / f"scene_{idx}{suffix}.png"
-            workflow = _build_workflow(
-                prompt=prompt,
-                negative_prompt=_negative_prompt(config),
-                checkpoint=config.SDXL_CHECKPOINT,
-                width=config.COMFYUI_IMAGE_WIDTH,
-                height=config.COMFYUI_IMAGE_HEIGHT,
-                seed=seed,
-                filename_prefix=prefix,
-                steps=config.COMFYUI_STEPS,
-            )
 
             last_error = ""
             for attempt in range(1, config.COMFYUI_IMAGE_RETRIES + 1):
+                workflow = _build_workflow(
+                    prompt=prompt,
+                    negative_prompt=_negative_prompt(config),
+                    checkpoint=config.SDXL_CHECKPOINT,
+                    width=config.COMFYUI_IMAGE_WIDTH,
+                    height=config.COMFYUI_IMAGE_HEIGHT,
+                    seed=seed + attempt - 1,
+                    filename_prefix=prefix,
+                    steps=steps,
+                    cfg=cfg,
+                    sampler=sampler,
+                    scheduler=scheduler,
+                )
                 try:
                     prompt_id = comfyui_client.queue_prompt(base_url, workflow, client_id)
                     history = comfyui_client.wait_for_completion(base_url, prompt_id)
@@ -191,7 +241,6 @@ def generate_images(
             total_images += 1
 
             logger.info("[IMG] Guardada: %s", dest.name)
-            comfyui_client.free_vram(base_url)
 
         scene["image_paths"] = scene_paths
 
@@ -204,7 +253,7 @@ if __name__ == "__main__":
     cfg.resolve_paths()
     cfg.ensure_directories()
 
-    sample = [
+    sample: list[dict[str, Any]] = [
         {
             "scene_number": 1,
             "narration": "test",

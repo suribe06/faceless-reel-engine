@@ -83,12 +83,27 @@ python main.py --topic "La bruja de Blair colombiana" --keep-temp
 
 ## Flujo del pipeline
 
-1. **Guión** — Ollama genera escenas en JSON (narración ES + prompts EN)
-2. **TTS** — Kokoro narra cada escena → `temp/audio/scene_N.wav`
-3. **Imágenes** — ComfyUI genera una imagen SDXL por escena → `temp/images/scene_N.png`
-4. **Video** — FFmpeg ensambla clips con Ken Burns, subtítulos y música → `output/`
+1. **Guión** — Ollama genera escenas en JSON (narración ES, `hook_line`, `visual_anchor`, prompts EN)
+2. **TTS** — Kokoro narra cada frase y guarda la duración real → `temp/audio/scene_N.wav`
+3. **Imágenes** — ComfyUI genera SDXL y deja el checkpoint cargado entre tomas → `temp/images/scene_N.png`
+4. **Video** — FFmpeg hace zoom/pan, quema subtítulos y la frase de apertura, mezcla la voz a −14 LUFS → `output/`
 
-Tiempo estimado: **15–25 minutos** para un video de 3–4 min en RTX 4060 Laptop (8 GB VRAM).
+## Medir un video
+
+Ollama tiene que estar arriba. ComfyUI arranca solo si no responde en el puerto 8188. Un video corto basta para ver el archivo y el reloj de pared; el default de 3–4 min genera muchas más imágenes.
+
+```bash
+time python main.py \
+  --topic "El misterio del vuelo MH370" \
+  --duration-min 45 \
+  --duration-max 60
+```
+
+Usa el `python` que ya importa `kokoro`, `ollama` y `requests`. El `.venv` de esta carpeta no sirve: fue creado en otro proyecto y no tiene esas librerías.
+
+Al terminar, el log imprime `Video final: ...`. El mp4 queda en `output/`. `time` muestra el tiempo real en la línea `real`. El detalle paso a paso está en `logs/run_*.log`.
+
+`--keep-temp` conserva `temp/` por si hay que reanudar con `--resume-from tts|images|video` sin repetir lo que ya salió bien.
 
 ## Estructura
 

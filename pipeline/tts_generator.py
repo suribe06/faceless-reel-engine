@@ -10,6 +10,7 @@ import numpy as np
 import soundfile as sf
 
 from config import PipelineConfig
+from pipeline.subtitles import cues_from_spoken_durations, split_spoken_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,11 @@ def release_after_tts() -> None:
         pass
 
 
+def _gap_seconds(config: PipelineConfig) -> float:
+    samples = int(KOKORO_SAMPLE_RATE * config.TTS_CHUNK_SILENCE_MS / 1000)
+    return samples / KOKORO_SAMPLE_RATE
+
+
 def _concat_audio_chunks(chunks: list[np.ndarray], config: PipelineConfig) -> np.ndarray:
     """Join TTS segments with short silence and peak normalization."""
     if len(chunks) == 1:
@@ -203,15 +209,40 @@ def generate_audio(
         if not narration:
             raise ValueError(f"Escena {idx}: narración vacía")
 
-        chunks = _split_text(narration)
-        chunk_audio: list[np.ndarray] = []
-
-        for chunk in chunks:
-            chunk_audio.append(
-                _synthesize_text(pipeline, chunk, voice_id, config.TTS_SPEED)
+        sentences = split_spoken_sentences(narration)
+        sentence_audio: list[np.ndarray] = []
+        sentence_durs: list[float] = []
+        for sentence in sentences:
+            chunks = _split_text(sentence)
+            audio = _concat_audio_chunks(
+                [_synthesize_text(pipeline, chunk, voice_id, config.TTS_SPEED) for chunk in chunks],
+                config,
             )
+            sentence_audio.append(audio)
+            sentence_durs.append(len(audio) / KOKORO_SAMPLE_RATE)
 
-        combined = _concat_audio_chunks(chunk_audio, config)
+        gap = _gap_seconds(config) if len(sentence_audio) > 1 else 0.0
+        if len(sentence_audio) == 1:
+            combined = sentence_audio[0]
+        else:
+            silence = np.zeros(
+                int(KOKORO_SAMPLE_RATE * config.TTS_CHUNK_SILENCE_MS / 1000),
+                dtype=np.float32,
+            )
+            parts: list[np.ndarray] = []
+            for i, audio in enumerate(sentence_audio):
+                parts.append(audio)
+                if i < len(sentence_audio) - 1:
+                    parts.append(silence)
+            combined = np.concatenate(parts)
+
+        scene["subtitle_cues"] = [
+            {"start": round(start, 3), "end": round(end, 3), "text": text}
+            for start, end, text in cues_from_spoken_durations(
+                sentences, sentence_durs, config, gap
+            )
+        ]
+
         output_path = audio_dir / f"scene_{idx}.wav"
         sf.write(str(output_path), combined, KOKORO_SAMPLE_RATE)
 

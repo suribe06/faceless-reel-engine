@@ -1,4 +1,4 @@
-"""Shared assembly planning helpers — public seam for ffmpeg and moviepy adapters."""
+"""Shared assembly planning helpers for the FFmpeg encoder."""
 
 from __future__ import annotations
 
