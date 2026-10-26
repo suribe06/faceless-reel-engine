@@ -105,7 +105,7 @@ def chat(
 def unload_ollama_model(config: PipelineConfig) -> None:
     """Unload the Ollama model from VRAM to free memory for ComfyUI/SDXL."""
     url = f"{config.OLLAMA_BASE_URL.rstrip('/')}/api/generate"
-    payload = {
+    payload: dict[str, Any] = {
         "model": config.OLLAMA_MODEL,
         "prompt": "",
         "keep_alive": 0,

@@ -6,6 +6,8 @@ Generador automatizado de videos verticales estilo true crime / misterio para re
 
 El pipeline es **estrictamente secuencial**. Cada fase usa la GPU/RAM de forma exclusiva y **libera recursos al terminar** antes de pasar a la siguiente.
 
+Si `--topic` es una frase y no hay `assets/topics/<slug>.txt`, Ollama escribe ese brief y el video sigue solo. Un archivo que ya existe no se regenera.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  CLI: python main.py --topic "..." [--duration-min] [--duration-max] │

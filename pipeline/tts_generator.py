@@ -32,8 +32,6 @@ def _resolve_voice(voice_setting: str) -> tuple[str, str]:
     if key in VOICE_MAP:
         return VOICE_MAP[key]
     if "_" in voice_setting:
-        prefix = voice_setting[:2]
-        lang = prefix if prefix in {"ef", "em", "af", "am"} else "e"
         return ("e", voice_setting)
     return VOICE_MAP["es"]
 
