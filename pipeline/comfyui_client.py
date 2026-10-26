@@ -171,7 +171,7 @@ def _format_comfyui_error(messages: Any) -> str:
 def queue_prompt(base_url: str, workflow: dict[str, Any], client_id: str) -> str:
     """Submit workflow to ComfyUI and return prompt_id."""
     url = f"{base_url.rstrip('/')}/prompt"
-    payload = {"prompt": workflow, "client_id": client_id}
+    payload: dict[str, Any] = {"prompt": workflow, "client_id": client_id}
 
     try:
         response = requests.post(url, json=payload, timeout=30)
