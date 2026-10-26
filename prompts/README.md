@@ -18,7 +18,8 @@ Tras editar, reinicia el pipeline (`python main.py ...`) para que cargue los cam
 
 Estos valores los calcula el pipeline automáticamente desde `config.py` y los flags `--duration-min` / `--duration-max`:
 
-- `{topic}` — tema del video (CLI `--topic`)
+- `{topic_label}` — título corto del brief
+- `{topic_brief}` — texto completo del brief
 - `{target_min}`, `{target_max}` — duración objetivo en segundos
 - `{target_min_minutes}`, `{target_max_minutes}` — mismo rango en minutos
 - `{target_duration_mid}` — punto medio del rango
@@ -30,7 +31,8 @@ En `script_correction.md` usa `{error}`, `{min_scenes}` y `{max_scenes}`.
 
 ## TTS
 
-Kokoro no usa prompts de texto: narra el campo `narration` de cada escena del JSON.
+Kokoro no usa prompts de texto: narra el campo `narration` de cada escena del JSON, frase por frase.
+El JSON también pide `hook_line` (frase corta en pantalla) y `visual_anchor` (look en inglés que se antepone a cada imagen).
 La voz y velocidad se configuran en `config.py` (`TTS_VOICE`, `TTS_SPEED`) o con `--voice`.
 
 ## Tips

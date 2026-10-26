@@ -4,8 +4,9 @@ Error: {error}
 Corrige y responde ÚNICAMENTE con JSON válido, sin markdown ni texto extra.
 
 Checklist obligatorio:
+- Incluye hook_line (español, 4 a 8 palabras) y visual_anchor (inglés, menos de 20 palabras)
 - Cada escena debe tener: scene_number, narration, image_prompt, duration_hint
-- image_prompt es SIEMPRE un string en inglés (nunca null, nunca vacío)
+- image_prompt es SIEMPRE un string en inglés (nunca null, nunca vacío, nunca la narración)
 - NO uses image_prompts — solo image_prompt por escena
 - narration nunca vacía
 - total_estimated_duration dentro del rango pedido

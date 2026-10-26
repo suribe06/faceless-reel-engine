@@ -36,7 +36,7 @@ def run_preflight(config: PipelineConfig) -> PreflightResult:
     result = PreflightResult()
 
     if not _check_command("ffmpeg", ["ffmpeg", "-version"]):
-        result.errors.append("ffmpeg no instalado (requerido por MoviePy)")
+        result.errors.append("ffmpeg no instalado (requerido para ensamblar el video)")
         result.ok = False
 
     if not _check_command("espeak-ng", ["espeak-ng", "--version"]):

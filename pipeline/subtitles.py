@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-import logging
+import re
 import textwrap
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-
 from config import PipelineConfig
 
-logger = logging.getLogger(__name__)
 
-
-def _resolve_font(config: PipelineConfig) -> str:
+def resolve_font(config: PipelineConfig) -> str:
     if config.SUBTITLE_FONT_PATH and Path(config.SUBTITLE_FONT_PATH).exists():
         return str(config.SUBTITLE_FONT_PATH)
     candidates = [
@@ -30,6 +25,22 @@ def _resolve_font(config: PipelineConfig) -> str:
         "No se encontró fuente para subtítulos. "
         "Instala fonts-liberation o define SUBTITLE_FONT_PATH en config.py"
     )
+
+
+def split_spoken_sentences(text: str) -> list[str]:
+    """Sentence units Kokoro speaks as one piece, so cue times can match the wav."""
+    text = " ".join(text.strip().split())
+    if not text:
+        return []
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    if not parts:
+        return [text]
+    sentences: list[str] = []
+    for part in parts:
+        if part[-1] not in ".!?":
+            part += "."
+        sentences.append(part)
+    return sentences
 
 
 def split_narration_lines(text: str, max_chars: int) -> list[str]:
@@ -77,12 +88,84 @@ def build_subtitle_cues(
     return cues
 
 
+def cues_from_spoken_durations(
+    sentences: list[str],
+    durations: list[float],
+    config: PipelineConfig,
+    gap: float,
+) -> list[tuple[float, float, str]]:
+    """Place lines inside each spoken sentence. Drift stays inside that sentence."""
+    cues: list[tuple[float, float, str]] = []
+    t = 0.0
+    for i, (sentence, dur) in enumerate(zip(sentences, durations)):
+        dur = max(0.0, float(dur))
+        if dur <= 0 or not sentence.strip():
+            continue
+        for start, end, line in build_subtitle_cues(sentence, dur, config):
+            cues.append((t + start, t + end, line))
+        t += dur
+        if i < len(sentences) - 1:
+            t += max(0.0, gap)
+    return cues
+
+
+def scene_cues(
+    scene: dict[str, Any],
+    config: PipelineConfig,
+) -> list[tuple[float, float, str]]:
+    """Prefer timings measured at TTS. Fall back to a char split for old runs."""
+    stored = scene.get("subtitle_cues")
+    if isinstance(stored, list) and stored:
+        cues: list[tuple[float, float, str]] = []
+        for item in stored:
+            if not isinstance(item, dict) or not str(item.get("text", "")).strip():
+                continue
+            cues.append((float(item["start"]), float(item["end"]), str(item["text"]).strip()))
+        if cues:
+            return cues
+    return build_subtitle_cues(
+        str(scene.get("narration", "")),
+        float(scene.get("audio_duration") or 0),
+        config,
+    )
+
+
+def cues_in_window(
+    cues: list[tuple[float, float, str]],
+    start: float,
+    end: float,
+) -> list[tuple[float, float, str]]:
+    """Shift cues into a shot that only covers [start, end] of the scene."""
+    selected: list[tuple[float, float, str]] = []
+    for c0, c1, text in cues:
+        if c1 <= start + 0.01 or c0 >= end - 0.01:
+            continue
+        selected.append((max(0.0, c0 - start), min(end, c1) - start, text))
+    return selected
+
+
 def _format_srt_time(seconds: float) -> str:
     ms = int(round(max(0.0, seconds) * 1000))
     h, ms = divmod(ms, 3_600_000)
     m, ms = divmod(ms, 60_000)
     s, ms = divmod(ms, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def write_srt_cues(cues: list[tuple[float, float, str]], path: Path) -> None:
+    """Write an SRT whose zero is the start of this shot."""
+    blocks: list[str] = []
+    cue_index = 1
+    for start, end, text in cues:
+        if end <= start or not text.strip():
+            continue
+        blocks.append(
+            f"{cue_index}\n"
+            f"{_format_srt_time(start)} --> {_format_srt_time(end)}\n"
+            f"{text.strip()}\n"
+        )
+        cue_index += 1
+    path.write_text("\n".join(blocks), encoding="utf-8")
 
 
 def write_srt_for_scenes(
@@ -106,7 +189,7 @@ def write_srt_for_scenes(
             scene_offset += duration
             continue
 
-        for start, end, text in build_subtitle_cues(narration, duration, config):
+        for start, end, text in scene_cues(scene, config):
             abs_start = scene_offset + start
             abs_end = scene_offset + end
             blocks.append(
@@ -118,94 +201,3 @@ def write_srt_for_scenes(
         scene_offset += duration
 
     path.write_text("\n".join(blocks), encoding="utf-8")
-
-
-def render_subtitle_rgba(text: str, config: PipelineConfig, font_path: str) -> np.ndarray:
-    """Render one subtitle line to RGBA numpy array."""
-    width = config.IMAGE_WIDTH - config.SUBTITLE_MARGIN_X * 2
-    font = ImageFont.truetype(font_path, config.SUBTITLE_FONT_SIZE)
-    lines = textwrap.wrap(text, width=config.SUBTITLE_MAX_CHARS) or [text]
-
-    line_heights = []
-    max_line_w = 0
-    for line in lines:
-        bbox = font.getbbox(line)
-        line_w = bbox[2] - bbox[0]
-        line_h = bbox[3] - bbox[1]
-        max_line_w = max(max_line_w, line_w)
-        line_heights.append(line_h)
-
-    pad_x, pad_y = 16, 12
-    block_w = min(width, max_line_w + pad_x * 2)
-    block_h = sum(line_heights) + pad_y * 2 + (len(lines) - 1) * 6
-
-    img = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle(
-        (0, 0, block_w - 1, block_h - 1),
-        radius=8,
-        fill=(0, 0, 0, int(255 * config.SUBTITLE_BG_OPACITY)),
-    )
-
-    y = pad_y
-    for line, lh in zip(lines, line_heights):
-        bbox = font.getbbox(line)
-        line_w = bbox[2] - bbox[0]
-        x = (block_w - line_w) // 2
-        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-        y += lh + 6
-
-    return np.array(img)
-
-
-def overlay_subtitles_on_clip(
-    base_clip,
-    scene: dict[str, Any],
-    duration: float,
-    config: PipelineConfig,
-    mpy_version: str,
-    mp: dict,
-):
-    """Composite subtitle cues over a scene clip."""
-    if not config.SUBTITLES_ENABLED:
-        return base_clip
-
-    narration = scene.get("narration", "").strip()
-    if not narration:
-        return base_clip
-
-    font_path = _resolve_font(config)
-    cues = build_subtitle_cues(narration, duration, config)
-    if not cues:
-        return base_clip
-
-    CompositeVideoClip = mp["CompositeVideoClip"]
-    ImageClip = mp["ImageClip"]
-    layers = [base_clip]
-
-    for start, end, text in cues:
-        if end <= start:
-            continue
-        rgba = render_subtitle_rgba(text, config, font_path)
-        sub = ImageClip(rgba, is_mask=False, transparent=True)
-        clip_dur = end - start
-
-        if mpy_version == "v2":
-            sub = sub.with_duration(clip_dur)
-            sub = sub.with_start(start)
-            y = config.IMAGE_HEIGHT - rgba.shape[0] - config.SUBTITLE_MARGIN_Y
-            x = (config.IMAGE_WIDTH - rgba.shape[1]) // 2
-            sub = sub.with_position((x, y))
-        else:
-            sub = sub.set_duration(clip_dur)
-            sub = sub.set_start(start)
-            y = config.IMAGE_HEIGHT - rgba.shape[0] - config.SUBTITLE_MARGIN_Y
-            x = (config.IMAGE_WIDTH - rgba.shape[1]) // 2
-            sub = sub.set_position((x, y))
-
-        layers.append(sub)
-
-    if len(layers) == 1:
-        return base_clip
-
-    return CompositeVideoClip(layers, size=(config.IMAGE_WIDTH, config.IMAGE_HEIGHT))

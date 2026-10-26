@@ -16,7 +16,7 @@ Terms used across the pipeline. Architecture reviews should use these names.
 | **DurationPolicy** | Single owner of “long enough?” — estimate gates, TTS thresholds, extension decisions. |
 | **TTS** | Kokoro text-to-speech producing per-scene wavs and measured `audio_duration`. |
 | **ComfyUI images** | SDXL generation via the ComfyUI adapter (lifecycle + HTTP). |
-| **Video assembly** | Planner + encode adapters (ffmpeg default, moviepy legacy) into a vertical MP4. |
+| **Video assembly** | FFmpeg encoder: Ken Burns, burned subtitles, hook line, loudness, music ducking. |
 | **Resume** | Continue from a saved RunState step (`tts` \| `images` \| `video`). |
 
 ## Adapters (external systems)

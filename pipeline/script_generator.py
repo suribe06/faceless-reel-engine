@@ -45,12 +45,40 @@ def _first_valid_prompt(scene: dict[str, Any]) -> str:
     return ""
 
 
-def _fallback_prompt_from_narration(narration: str) -> str:
-    snippet = narration.strip()[:120].rstrip("., ")
+def _fallback_image_prompt() -> str:
+    """English still when the LLM omits image_prompt. Spanish narration breaks SDXL."""
     return (
-        f"Cinematic photorealistic true crime scene, {snippet}, "
-        "dramatic moody lighting, high detail, 8k"
+        "photorealistic cinematic true-crime still, moody low-key lighting, "
+        "35mm film grain, shallow depth of field, no readable text"
     )
+
+
+def _prepend_anchor(scene: dict[str, Any], anchor: str) -> None:
+    anchor = anchor.strip().rstrip(",")
+    if not anchor:
+        return
+
+    def add(prompt: str) -> str:
+        text = prompt.strip()
+        if not text:
+            return anchor
+        if anchor.lower() in text.lower():
+            return text
+        return f"{anchor}, {text}"
+
+    scene["image_prompt"] = add(_prompt_text(scene.get("image_prompt")))
+    prompts = scene.get("image_prompts")
+    if isinstance(prompts, list):
+        scene["image_prompts"] = [add(_prompt_text(p)) for p in prompts]
+
+
+def short_hook_line(text: str, limit: int = 42) -> str:
+    """One on-screen line. Cuts on a word so drawtext does not run off the frame."""
+    cleaned = " ".join(str(text).replace("\n", " ").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    cut = cleaned[:limit].rsplit(" ", 1)[0].rstrip(".,;:")
+    return cut or cleaned[:limit]
 
 
 def _dual_prompts(base: str, key_moment: str) -> list[str]:
@@ -79,9 +107,9 @@ def _normalize_scene_images(scenes: list[dict[str, Any]]) -> None:
     for i, scene in enumerate(scenes, start=1):
         base = _first_valid_prompt(scene)
         if not base:
-            base = _fallback_prompt_from_narration(scene.get("narration", ""))
+            base = _fallback_image_prompt()
             logger.warning(
-                "Escena %d: sin image_prompt — generado automáticamente desde narración",
+                "Escena %d: sin image_prompt — still genérico en inglés (SDXL no recibe la narración)",
                 i,
             )
 
@@ -90,28 +118,31 @@ def _normalize_scene_images(scenes: list[dict[str, Any]]) -> None:
 
         if key_moment in KEY_MOMENTS:
             existing = scene.get("image_prompts")
-            if isinstance(existing, list):
-                valid = [_prompt_text(p) for p in existing if _prompt_text(p)]
-                if len(valid) >= 2:
-                    scene["image_prompts"] = valid[:2]
-                    continue
-                if len(valid) == 1:
-                    scene["image_prompts"] = _dual_prompts(valid[0], key_moment)
-                    logger.info(
-                        "Escena %d (%s): segundo shot generado desde image_prompts[0]",
-                        i,
-                        key_moment,
-                    )
-                    continue
-
-            scene["image_prompts"] = _dual_prompts(base, key_moment)
-            logger.info(
-                "Escena %d (%s): 2 shots generados desde image_prompt",
-                i,
-                key_moment,
+            valid = (
+                [_prompt_text(p) for p in existing if _prompt_text(p)]
+                if isinstance(existing, list)
+                else []
             )
+            if len(valid) >= 2:
+                scene["image_prompts"] = valid[:2]
+            elif len(valid) == 1:
+                scene["image_prompts"] = _dual_prompts(valid[0], key_moment)
+                logger.info(
+                    "Escena %d (%s): segundo shot generado desde image_prompts[0]",
+                    i,
+                    key_moment,
+                )
+            else:
+                scene["image_prompts"] = _dual_prompts(base, key_moment)
+                logger.info(
+                    "Escena %d (%s): 2 shots generados desde image_prompt",
+                    i,
+                    key_moment,
+                )
         else:
             scene.pop("image_prompts", None)
+
+        _prepend_anchor(scene, _prompt_text(scene.get("visual_anchor")))
 
 
 def _normalize_scenes(scenes: list[dict[str, Any]], config: PipelineConfig) -> None:
@@ -176,6 +207,23 @@ def _extract_json(text: str) -> str:
     return cleaned
 
 
+def apply_script_visuals(data: dict[str, Any], config: PipelineConfig) -> None:
+    """One English look for every shot, and a short on-screen hook."""
+    anchor = _prompt_text(data.get("visual_anchor")) or config.IMAGE_ANCHOR.strip()
+    data["visual_anchor"] = anchor
+
+    hook = _prompt_text(data.get("hook_line"))
+    if not hook and data.get("scenes"):
+        hook = str(data["scenes"][0].get("narration", "")).split(".")[0]
+    hook = short_hook_line(hook)
+    data["hook_line"] = hook
+
+    for scene in data["scenes"]:
+        scene["visual_anchor"] = anchor
+        scene["hook_line"] = hook
+        _prepend_anchor(scene, anchor)
+
+
 def normalize_script_scenes(scenes: list[dict[str, Any]], config: PipelineConfig) -> None:
     """Apply all scene normalizers after script load or extension."""
     _normalize_scenes(scenes, config)
@@ -222,11 +270,21 @@ def extend_script_for_duration(
     if not isinstance(extra, list) or not extra:
         raise ValueError("Ollama no devolvió escenas extra válidas")
 
+    anchor = ""
+    hook = ""
+    for scene in existing_scenes:
+        anchor = anchor or _prompt_text(scene.get("visual_anchor"))
+        hook = hook or _prompt_text(scene.get("hook_line"))
+
     start_num = len(existing_scenes) + 1
     for i, scene in enumerate(extra):
         scene["scene_number"] = start_num + i
         if "duration_hint" not in scene:
             scene["duration_hint"] = avg
+        if anchor:
+            scene["visual_anchor"] = anchor
+        if hook:
+            scene["hook_line"] = hook
 
     logger.info(
         "Añadidas %d escenas extra para cubrir ~%.0fs de déficit",
@@ -259,6 +317,7 @@ def _validate_script(data: dict[str, Any], config: PipelineConfig) -> None:
     validate_estimated_duration(data["total_estimated_duration"], config)
 
     normalize_script_scenes(scenes, config)
+    apply_script_visuals(data, config)
 
     for i, scene in enumerate(scenes, start=1):
         if not scene.get("narration", "").strip():

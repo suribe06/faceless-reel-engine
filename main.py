@@ -35,6 +35,7 @@ def _setup_logging(log_file: Path, *, use_rich: bool = True) -> None:
     file_handler.setFormatter(file_formatter)
     root.addHandler(file_handler)
 
+    console_handler: logging.Handler
     if use_rich:
         try:
             from rich.logging import RichHandler
@@ -115,12 +116,6 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Desactivar subtítulos quemados desde el guión",
     )
-    parser.add_argument(
-        "--video-engine",
-        choices=["ffmpeg", "moviepy"],
-        default=None,
-        help="Motor de ensamblado (default: ffmpeg — mucho más rápido)",
-    )
     return parser.parse_args()
 
 
@@ -151,8 +146,6 @@ def main() -> int:
 
     if args.no_subtitles:
         config.SUBTITLES_ENABLED = False
-    if args.video_engine:
-        config.VIDEO_ENGINE = args.video_engine
 
     log_file = _make_log_file(config.LOG_DIR)
     _setup_logging(log_file)

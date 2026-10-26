@@ -16,7 +16,8 @@ from pipeline.assembly_common import (
     scene_image_part_durations,
     cleanup_temp as remove_temp_dir,
 )
-from pipeline.subtitles import write_srt_for_scenes
+from pipeline.subtitles import cues_in_window, scene_cues, write_srt_cues
+from pipeline.subtitles import resolve_font
 
 logger = logging.getLogger(__name__)
 
@@ -43,41 +44,78 @@ def _run_ffmpeg(args: list[str], desc: str) -> None:
         raise RuntimeError(f"FFmpeg falló ({desc}): {err[-2000:]}")
 
 
-def _video_filter(duration: float, config: PipelineConfig, pan_mode: str) -> str:
-    """Ken Burns: pan lineal sobre imagen oversize (igual que MoviePy, sin zoom animado)."""
+def _even(value: int) -> int:
+    return value if value % 2 == 0 else value - 1
+
+
+def ken_burns_filter(duration: float, config: PipelineConfig, pan_mode: str) -> str:
+    """Slow zoom plus pan. zoompan z=1 shows the whole pre-scaled frame."""
     fps = config.VIDEO_FPS
     w, h = config.IMAGE_WIDTH, config.IMAGE_HEIGHT
+    frames = max(1, int(round(max(duration, 0.01) * fps)))
 
-    if not config.KEN_BURNS_ENABLED:
+    if not config.KEN_BURNS_ENABLED or config.KEN_BURNS_ZOOM <= 1.001:
         return (
             f"scale={w}:{h}:force_original_aspect_ratio=increase,"
-            f"crop={w}:{h},fps={fps},format=yuv420p"
+            f"crop={w}:{h},fps={fps},setsar=1"
         )
 
     zoom = config.KEN_BURNS_ZOOM
-    zw = int(w * zoom)
-    zh = int(h * zoom)
-    dur = max(duration, 0.01)
+    zw = _even(max(w + 2, int(w * zoom)))
+    zh = _even(max(h + 2, int(h * zoom)))
+    progress = f"on/{frames}"
 
-    # MoviePy: imagen estática 1.12× y ventana 1080×1920 que se desplaza (sin zoom progresivo).
     if pan_mode == "left_to_right":
-        x_expr = f"(iw-ow)*t/{dur:.4f}"
-        y_expr = "(ih-oh)/2"
+        x_expr = f"(iw-iw/zoom)*{progress}"
+        y_expr = "(ih-ih/zoom)/2"
     elif pan_mode == "right_to_left":
-        x_expr = f"(iw-ow)*(1-t/{dur:.4f})"
-        y_expr = "(ih-oh)/2"
+        x_expr = f"(iw-iw/zoom)*(1-{progress})"
+        y_expr = "(ih-ih/zoom)/2"
     elif pan_mode == "top_to_bottom":
-        x_expr = "(iw-ow)/2"
-        y_expr = f"(ih-oh)*t/{dur:.4f}"
+        x_expr = "(iw-iw/zoom)/2"
+        y_expr = f"(ih-ih/zoom)*{progress}"
     else:
-        x_expr = "(iw-ow)/2"
-        y_expr = "(ih-oh)/2"
+        x_expr = "(iw-iw/zoom)/2"
+        y_expr = "(ih-ih/zoom)/2"
 
+    z_expr = f"1+({zoom:.4f}-1)*{progress}"
     return (
         f"scale={zw}:{zh}:force_original_aspect_ratio=increase,"
         f"crop={zw}:{zh},"
-        f"crop={w}:{h}:x='{x_expr}':y='{y_expr}',"
-        f"fps={fps},format=yuv420p"
+        f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':d={frames}:s={w}x{h}:fps={fps},"
+        f"setsar=1"
+    )
+
+
+def narration_mix_filter(config: PipelineConfig, total_duration: float, *, has_music: bool) -> str:
+    """Voice at -14 LUFS. Music ducks while someone is speaking."""
+    if not has_music:
+        return "[1:a]loudnorm=I=-14:TP=-1.5:LRA=11[aout]"
+
+    fade = min(3.0, total_duration / 2)
+    fade_start = max(0.0, total_duration - fade)
+    return (
+        f"[1:a]asplit=2[nar][nar_sc];"
+        f"[2:a]volume={config.MUSIC_VOLUME},afade=t=out:st={fade_start:.3f}:d={fade:.3f}[mus];"
+        f"[mus][nar_sc]sidechaincompress=threshold=0.03:ratio=6:attack=80:release=500[musduck];"
+        f"[nar][musduck]amix=inputs=2:duration=first:dropout_transition=2,"
+        f"loudnorm=I=-14:TP=-1.5:LRA=11[aout]"
+    )
+
+
+def _escape_filter_path(path: Path) -> str:
+    return path.resolve().as_posix().replace(":", r"\:").replace("'", r"\'")
+
+
+def _drawtext_filter(text_path: Path, font_path: str, config: PipelineConfig) -> str:
+    text = _escape_filter_path(text_path)
+    font = _escape_filter_path(Path(font_path))
+    seconds = config.HOOK_OVERLAY_SECONDS
+    return (
+        f"drawtext=fontfile='{font}':textfile='{text}':fontsize={config.HOOK_FONT_SIZE}:"
+        f"fontcolor=white:borderw=3:bordercolor=black:"
+        f"box=1:boxcolor=black@0.55:boxborderw=18:"
+        f"x=(w-text_w)/2:y=h*0.16:enable='lt(t,{seconds:.2f})'"
     )
 
 
@@ -87,32 +125,65 @@ def _render_image_clip(
     output: Path,
     config: PipelineConfig,
     pan_mode: str,
+    *,
+    srt_path: Path | None = None,
+    hook_text: str | None = None,
 ) -> None:
-    vf = _video_filter(duration, config, pan_mode)
-    _run_ffmpeg(
-        [
-            "-loop",
-            "1",
-            "-i",
-            image_path,
-            "-vf",
-            vf,
-            "-t",
-            f"{duration:.3f}",
-            "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            config.FFMPEG_PRESET,
-            "-crf",
-            str(config.FFMPEG_CRF),
-            "-pix_fmt",
-            "yuv420p",
-            *_ffmpeg_threads(config),
-            str(output),
-        ],
-        f"clip {output.name} ({duration:.1f}s)",
-    )
+    frames = max(1, int(round(max(duration, 0.01) * config.VIDEO_FPS)))
+    chain = ken_burns_filter(duration, config, pan_mode)
+    if srt_path is not None and srt_path.stat().st_size > 0:
+        chain = f"{chain},{_subtitle_filter(srt_path, config)}"
+
+    hook_file: Path | None = None
+    if hook_text and config.HOOK_OVERLAY_ENABLED:
+        hook_file = output.with_suffix(".hook.txt")
+        hook_file.write_text(hook_text.strip() + "\n", encoding="utf-8")
+        chain = f"{chain},{_drawtext_filter(hook_file, resolve_font(config), config)}"
+
+    logo = config.LOGO_PATH if config.LOGO_PATH.exists() else None
+    encode = [
+        "-frames:v",
+        str(frames),
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        config.FFMPEG_PRESET,
+        "-crf",
+        str(config.FFMPEG_CRF),
+        "-pix_fmt",
+        "yuv420p",
+        *_ffmpeg_threads(config),
+        str(output),
+    ]
+    if logo is None:
+        _run_ffmpeg(
+            ["-i", image_path, "-vf", f"{chain},format=yuv420p", *encode],
+            f"clip {output.name} ({duration:.1f}s)",
+        )
+    else:
+        margin = config.LOGO_MARGIN
+        _run_ffmpeg(
+            [
+                "-i",
+                image_path,
+                "-i",
+                str(logo),
+                "-filter_complex",
+                (
+                    f"[0:v]{chain}[vbase];"
+                    f"[1:v]scale={config.LOGO_WIDTH}:-1,format=rgba,"
+                    f"colorchannelmixer=aa={config.LOGO_OPACITY}[logo];"
+                    f"[vbase][logo]overlay=W-w-{margin}:H-h-{margin},format=yuv420p[vout]"
+                ),
+                "-map",
+                "[vout]",
+                *encode,
+            ],
+            f"clip {output.name} ({duration:.1f}s)",
+        )
+    if hook_file is not None:
+        hook_file.unlink(missing_ok=True)
 
 
 def _concat_videos(sources: list[Path], output: Path) -> None:
@@ -133,6 +204,8 @@ def _concat_videos(sources: list[Path], output: Path) -> None:
             "0",
             "-i",
             str(list_file),
+            "-fflags",
+            "+genpts",
             "-c",
             "copy",
             str(output),
@@ -166,7 +239,7 @@ def _concat_narration(audio_files: list[str], output: Path) -> None:
 
 
 def _subtitle_filter(srt_path: Path, config: PipelineConfig) -> str:
-    escaped = srt_path.resolve().as_posix().replace(":", r"\:").replace("'", r"\'")
+    escaped = _escape_filter_path(srt_path)
     margin_v = config.SUBTITLE_MARGIN_Y // 3
     font_size = ass_font_size(config)
     style = (
@@ -185,13 +258,16 @@ def assemble_video_ffmpeg(
     title: str = "video",
     cleanup_temp: bool = True,
 ) -> str:
-    """Assemble final MP4 using FFmpeg filters (much faster than MoviePy)."""
+    """Assemble the final MP4 with FFmpeg."""
     work_dir = config.TEMP_DIR / "encode"
     work_dir.mkdir(parents=True, exist_ok=True)
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     segment_paths: list[Path] = []
     pan_modes = _pan_modes(config)
+    hook_line = ""
+    if config.HOOK_OVERLAY_ENABLED and scenes:
+        hook_line = str(scenes[0].get("hook_line") or "").strip()
 
     for idx, scene in enumerate(scenes, start=1):
         duration = float(scene.get("audio_duration", 0))
@@ -201,17 +277,56 @@ def assemble_video_ffmpeg(
         image_paths = scene["image_paths"]
         pan_mode = pan_modes[(idx - 1) % len(pan_modes)]
         segment = work_dir / f"scene_{idx:02d}.mp4"
+        cues = scene_cues(scene, config) if config.SUBTITLES_ENABLED else []
+
+        def render_part(
+            image: str,
+            part_dur: float,
+            dest: Path,
+            mode: str,
+            window_start: float,
+            *,
+            with_hook: bool,
+        ) -> None:
+            part_cues = cues_in_window(cues, window_start, window_start + part_dur)
+            srt = dest.with_suffix(".srt")
+            write_srt_cues(part_cues, srt)
+            _render_image_clip(
+                image,
+                part_dur,
+                dest,
+                config,
+                mode,
+                srt_path=srt if part_cues else None,
+                hook_text=hook_line if with_hook else None,
+            )
 
         if len(image_paths) == 1:
-            _render_image_clip(image_paths[0], duration, segment, config, pan_mode)
+            render_part(
+                image_paths[0],
+                duration,
+                segment,
+                pan_mode,
+                0.0,
+                with_hook=idx == 1 and bool(hook_line),
+            )
         else:
             part_durs = scene_image_part_durations(len(image_paths), duration)
             parts: list[Path] = []
+            cursor = 0.0
             for j, (img, part_dur) in enumerate(zip(image_paths, part_durs)):
                 part = work_dir / f"scene_{idx:02d}_{j}.mp4"
                 mode = pan_modes[(idx + j) % len(pan_modes)]
-                _render_image_clip(img, part_dur, part, config, mode)
+                render_part(
+                    img,
+                    part_dur,
+                    part,
+                    mode,
+                    cursor,
+                    with_hook=idx == 1 and j == 0 and bool(hook_line),
+                )
                 parts.append(part)
+                cursor += part_dur
             _concat_videos(parts, segment)
 
         segment_paths.append(segment)
@@ -223,161 +338,40 @@ def assemble_video_ffmpeg(
     narration_wav = work_dir / "narration.wav"
     _concat_narration(audio_files, narration_wav)
 
-    srt_path = work_dir / "subs.srt"
-    write_srt_for_scenes(scenes, srt_path, config)
-
     timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = config.OUTPUT_DIR / f"{sanitize_title(title)}_{timestamp}.mp4"
-    temp_mux = work_dir / "muxed.mp4"
 
     music_track = pick_background_music(config)
     total_duration = sum(float(s.get("audio_duration", 0)) for s in scenes)
-    fade = min(3.0, total_duration / 2)
-    fade_start = max(0.0, total_duration - fade)
-
     if music_track:
         logger.info("Música de fondo: %s", music_track.name)
-        _run_ffmpeg(
-            [
-                "-i",
-                str(video_only),
-                "-i",
-                str(narration_wav),
-                "-stream_loop",
-                "-1",
-                "-i",
-                str(music_track),
-                "-filter_complex",
-                (
-                    f"[1:a]volume=1[nar];"
-                    f"[2:a]volume={config.MUSIC_VOLUME},afade=t=out:st={fade_start}:d={fade}[mus];"
-                    f"[nar][mus]amix=inputs=2:duration=first:dropout_transition=2[aout]"
-                ),
-                "-map",
-                "0:v",
-                "-map",
-                "[aout]",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-shortest",
-                str(temp_mux),
-            ],
-            "mux video + narración + música",
-        )
-    else:
-        _run_ffmpeg(
-            [
-                "-i",
-                str(video_only),
-                "-i",
-                str(narration_wav),
-                "-map",
-                "0:v",
-                "-map",
-                "1:a",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-shortest",
-                str(temp_mux),
-            ],
-            "mux video + narración",
-        )
 
-    logo_path = config.LOGO_PATH
-    has_subs = config.SUBTITLES_ENABLED and srt_path.stat().st_size > 0
-
-    if logo_path.exists() and has_subs:
-        sub = _subtitle_filter(srt_path, config)
-        margin = config.LOGO_MARGIN
-        filter_complex = (
-            f"[0:v]{sub}[vsub];"
-            f"[1:v]scale={config.LOGO_WIDTH}:-1,format=rgba,"
-            f"colorchannelmixer=aa={config.LOGO_OPACITY}[logo];"
-            f"[vsub][logo]overlay=W-w-{margin}:H-h-{margin}[vout]"
-        )
-        _run_ffmpeg(
-            [
-                "-i",
-                str(temp_mux),
-                "-i",
-                str(logo_path),
-                "-filter_complex",
-                filter_complex,
-                "-map",
-                "[vout]",
-                "-map",
-                "0:a",
-                "-c:v",
-                "libx264",
-                "-preset",
-                config.FFMPEG_PRESET,
-                "-crf",
-                str(config.FFMPEG_CRF),
-                *_ffmpeg_threads(config),
-                "-c:a",
-                "copy",
-                str(output_path),
-            ],
-            "subtítulos + logo",
-        )
-    elif logo_path.exists():
-        margin = config.LOGO_MARGIN
-        _run_ffmpeg(
-            [
-                "-i",
-                str(temp_mux),
-                "-i",
-                str(logo_path),
-                "-filter_complex",
-                (
-                    f"[1:v]scale={config.LOGO_WIDTH}:-1,format=rgba,"
-                    f"colorchannelmixer=aa={config.LOGO_OPACITY}[logo];"
-                    f"[0:v][logo]overlay=W-w-{margin}:H-h-{margin}"
-                ),
-                "-c:v",
-                "libx264",
-                "-preset",
-                config.FFMPEG_PRESET,
-                "-crf",
-                str(config.FFMPEG_CRF),
-                *_ffmpeg_threads(config),
-                "-c:a",
-                "copy",
-                str(output_path),
-            ],
-            "logo",
-        )
-    elif has_subs:
-        sub = _subtitle_filter(srt_path, config)
-        _run_ffmpeg(
-            [
-                "-i",
-                str(temp_mux),
-                "-vf",
-                sub,
-                "-c:v",
-                "libx264",
-                "-preset",
-                config.FFMPEG_PRESET,
-                "-crf",
-                str(config.FFMPEG_CRF),
-                *_ffmpeg_threads(config),
-                "-c:a",
-                "copy",
-                str(output_path),
-            ],
-            "subtítulos",
-        )
-    else:
-        output_path.write_bytes(temp_mux.read_bytes())
+    mix = narration_mix_filter(config, total_duration, has_music=music_track is not None)
+    mux_inputs = ["-i", str(video_only), "-i", str(narration_wav)]
+    if music_track:
+        mux_inputs.extend(["-stream_loop", "-1", "-i", str(music_track)])
+    _run_ffmpeg(
+        [
+            *mux_inputs,
+            "-filter_complex",
+            mix,
+            "-map",
+            "0:v",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ],
+        "mux narración + música",
+    )
 
     if cleanup_temp:
         remove_temp_dir(config.TEMP_DIR)

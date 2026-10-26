@@ -1,6 +1,6 @@
 # Pipeline de video faceless — Guía completa
 
-Generador automatizado de videos verticales estilo true crime / misterio para redes sociales: guión (Ollama) → narración (Kokoro TTS) → imágenes (ComfyUI SDXL) → video (MoviePy).
+Generador automatizado de videos verticales estilo true crime / misterio para redes sociales: guión (Ollama) → narración (Kokoro TTS) → imágenes (ComfyUI SDXL) → video (FFmpeg).
 
 ## Flujo secuencial
 
@@ -21,25 +21,26 @@ El pipeline es **estrictamente secuencial**. Cada fase usa la GPU/RAM de forma e
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  PASO 2 — Audio (Kokoro TTS)                                    │
-│  • Narra cada scene.narration → temp/audio/scene_N.wav          │
-│  • Calcula duración real por escena (audio_duration)            │
+│  • Narra cada frase y mide su duración → temp/audio/scene_N.wav │
+│  • Esas duraciones alimentan los subtítulos                     │
 │  → release_after_tts(): libera pipeline Kokoro de memoria       │
 └───────────────────────────────┬─────────────────────────────────┘
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  PASO 3 — Imágenes (ComfyUI + SDXL)                             │
 │  • Auto-arranca ComfyUI si no está corriendo (--lowvram)        │
-│  • Negative prompt: prompts/image_negative.md                   │
-│  • Sufijo visual: prompts/image_style_suffix.md                 │
-│  • 1 imagen por escena; 2 en hook / twist / cierre (ComfyUI)  │
-│  • Genera 640×1152 → temp/images/scene_N.png (o _a/_b)         │
+│  • El checkpoint se queda en VRAM entre tomas                   │
+│  • 20 steps, dpmpp_2m, CFG 6 (lightning/hyper/turbo: 6 steps)   │
+│  • 1 imagen por escena; 2 en hook / twist / cierre              │
+│  • visual_anchor en inglés se antepone a cada prompt           │
 │  → release_after_images(): descarga modelos SDXL de VRAM        │
 └───────────────────────────────┬─────────────────────────────────┘
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  PASO 4 — Video (MoviePy + FFmpeg)                            │
-│  • Ken Burns, crossfade entre escenas, subtítulos del guión   │
-│  • Marca de agua + música aleatoria de assets/music/          │
+│  PASO 4 — Video (FFmpeg)                                        │
+│  • Zoom + pan, subtítulos por frase, hook_line los primeros s  │
+│  • Logo en cada clip; la mezcla de audio es una sola pasada    │
+│  • Voz cerca de −14 LUFS; la música cede mientras hay narración │
 │  • Limpia temp/ al finalizar (salvo --keep-temp)                │
 └───────────────────────────────┬─────────────────────────────────┘
                                 ▼
@@ -53,7 +54,7 @@ El pipeline es **estrictamente secuencial**. Cada fase usa la GPU/RAM de forma e
 | Ollama | 11434 | Modelo default: `qwen3.5:9b` |
 | ComfyUI | 8188 | Auto-arranque activado por defecto |
 | espeak-ng | — | Requerido por Kokoro |
-| FFmpeg | — | Requerido por MoviePy |
+| FFmpeg | — | Ensambla el video |
 
 Checkpoint SDXL en `~/comfy/ComfyUI/models/checkpoints/` (default: `realvisxlV50_v50Bakedvae.safetensors`).
 
@@ -96,7 +97,7 @@ Ver `assets/music/META_COMPLIANCE.md` para licencia Mixkit y publicación en Fac
 
 ### Subtítulos
 
-No hace falta Whisper: el guión ya tiene el texto exacto por escena. MoviePy quema subtítulos sincronizados con `audio_duration`, dividiendo cada `narration` en líneas legibles. Desactivar: `--no-subtitles` o `SUBTITLES_ENABLED = False`.
+No hace falta Whisper. Kokoro narra frase por frase y FFmpeg quema esas líneas con la duración medida. Dentro de una frase larga el corte sigue el largo del texto. Los primeros 2.6 s muestran `hook_line` arriba. Desactivar subtítulos: `--no-subtitles` o `SUBTITLES_ENABLED = False`. El hook se apaga con `HOOK_OVERLAY_ENABLED = False`.
 
 ## Configuración (`config.py`)
 
@@ -109,12 +110,16 @@ Parámetros principales sin tocar código de lógica:
 | `OLLAMA_MODEL` | qwen3.5:9b | Modelo de guión |
 | `TTS_VOICE` | es | Voz Kokoro |
 | `COMFYUI_IMAGE_WIDTH/HEIGHT` | 640×1152 | Resolución de generación |
+| `COMFYUI_STEPS` / `COMFYUI_CFG` | 20 / 6.0 | RealVisXL full. Un checkpoint con lightning, hyper o turbo en el nombre usa 6 steps y CFG 1.5 |
+| `COMFYUI_SAMPLER` | dpmpp_2m | Sampler de ComfyUI |
+| `COMFYUI_SEED` | -1 | Semilla base de la corrida. Un número ≥ 0 repite el mismo look |
 | `IMAGE_WIDTH/HEIGHT` | 1080×1920 | Resolución del video final |
 | `TTS_CHARS_PER_SECOND` | 18 | Calibración duración real Kokoro (ES) |
 | `COMFYUI_AUTO_START` | True | Arranca ComfyUI si no responde |
 | `COMFYUI_LOW_VRAM` | True | Modo VRAM GPU (`--lowvram`); no reduce calidad |
 | `KEN_BURNS_ENABLED` | True | Zoom + pan suave en cada imagen |
-| `KEN_BURNS_ZOOM` | 1.12 | Factor de zoom Ken Burns |
+| `KEN_BURNS_ZOOM` | 1.12 | Zoom final; el plano arranca en 1.0 |
+| `HOOK_OVERLAY_SECONDS` | 2.6 | Segundos de la frase grande al inicio |
 | `LOGO_PATH` | assets/logo/logo.png | Marca de agua (PNG con alpha ideal) |
 | `LOGO_WIDTH` | 140 | Ancho del logo en px (video 1080×1920) |
 | `LOGO_OPACITY` | 0.55 | Opacidad de la marca de agua |
@@ -167,8 +172,8 @@ faceless-reel-engine/
 │   ├── script_generator.py # Paso 1 — dominio guión (Ollama via adapter)
 │   ├── tts_generator.py    # Paso 2 — Kokoro
 │   ├── image_generator.py  # Paso 3 — dominio imágenes (ComfyUI via adapter)
-│   ├── video_assembler.py  # Paso 4 — dispatch + MoviePy legacy
-│   ├── ffmpeg_assembler.py # Paso 4 — adapter FFmpeg (default)
+│   ├── video_assembler.py  # Paso 4 — validación y llamada a FFmpeg
+│   ├── ffmpeg_assembler.py # Paso 4 — Ken Burns, subs, hook, audio
 │   ├── assembly_common.py  # Planner helpers compartidos
 │   ├── subtitles.py        # Subtítulos desde narration
 │   ├── preflight.py        # Checks al inicio
@@ -192,6 +197,8 @@ Ollama produce un JSON con esta estructura:
 ```json
 {
   "title": "Título del video",
+  "hook_line": "Nadie denunció el disparo",
+  "visual_anchor": "1990s Bogotá rainy night, 35mm, low-key light",
   "scenes": [
     {
       "scene_number": 1,
@@ -215,7 +222,7 @@ Ollama produce un JSON con esta estructura:
 }
 ```
 
-Escenas con **doble shot** (2 imágenes ComfyUI, audio partido en MoviePy):
+Escenas con **doble shot** (2 imágenes ComfyUI, el audio de la escena se parte entre las dos):
 - Escena 1 → `key_moment: "hook"`
 - Escena central → `"twist"`
 - Última escena → `"closing"`
@@ -230,8 +237,8 @@ En laptops con 8 GB, **Ollama y ComfyUI no pueden coexistir en GPU**:
 
 1. Ollama genera el guión (~6 GB VRAM)
 2. Se descarga Ollama antes del paso 3
-3. ComfyUI genera imágenes en modo `--lowvram`
-4. Se descargan modelos SDXL antes del encode de video
+3. ComfyUI genera todas las imágenes en `--lowvram` sin descargar el checkpoint entre tomas
+4. Se descargan los modelos SDXL antes del encode de video
 
 Si falla por OOM, revisa `logs/latest_error.log` y cierra apps que usen GPU.
 
@@ -243,17 +250,11 @@ Si falla por OOM, revisa `logs/latest_error.log` y cierra apps que usen GPU.
 | `logs/latest_error.log` | Último error (traceback resumido) |
 | `logs/comfyui_server.log` | Salida del servidor ComfyUI |
 
-El paso 4 (MoviePy/FFmpeg) puede tardar **3–5 minutos** en un video de ~2 min sin escribir logs intermedios — es normal.
+El paso 4 escribe un log por clip (`[ffmpeg] Escena N/M lista`). El cierre solo mezcla el audio; no vuelve a comprimir el video.
 
-## Tiempos estimados (RTX 4060 8 GB)
+## Cuánto tarda
 
-| Duración objetivo | Escenas | Tiempo total aprox. |
-|-------------------|---------|---------------------|
-| 1–2 min | 6–12 | 15–25 min |
-| 3–4 min | 15–20 | 45–90 min |
-| 5–6 min | 20–30 | 1.5–2.5 h |
-
-La mayor parte del tiempo está en ComfyUI (~15–20 s por imagen; +3 imágenes extra en escenas clave) y en el encode final de FFmpeg.
+No hay una tabla medida en esta máquina. El reloj es el comando `time` del README. Casi todo el tiempo sigue estando en ComfyUI: una imagen por escena, dos en hook, twist y cierre. El checkpoint ya no se recarga en cada toma, y el video no se codifica dos veces.
 
 ## Troubleshooting rápido
 
@@ -264,7 +265,7 @@ La mayor parte del tiempo está en ComfyUI (~15–20 s por imagen; +3 imágenes 
 | JSON inválido de Ollama | Ajustar `prompts/script_system.md`; usar `qwen3.5:9b` con `think: false` |
 | Sin música | Añadir `.mp3` a `assets/music/` |
 | Sin marca de agua | Colocar `assets/logo/logo.png` (PNG transparente recomendado) |
-| Pipeline “congelado” en paso 4 | FFmpeg codificando — esperar o revisar `output/*.mp4` creciendo |
+| El paso 4 parece quieto | Mira `logs/run_*.log`: cada clip deja una línea `[ffmpeg]` |
 
 ## Próximos pasos sugeridos
 
