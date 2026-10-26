@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -13,7 +17,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install ffmpeg
-        run: ffmpeg -version >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+        run: command -v ffmpeg >/dev/null 2>&1 || sudo apt-get install -y ffmpeg
       - name: Install checkers and test imports
         run: python -m pip install mypy ruff requests pillow
       - name: Ruff
